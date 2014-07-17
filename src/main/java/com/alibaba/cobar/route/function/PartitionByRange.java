@@ -3,6 +3,8 @@ package com.alibaba.cobar.route.function;
 import com.alibaba.cobar.config.model.rule.RuleAlgorithm;
 import com.alibaba.cobar.parser.ast.expression.Expression;
 import com.alibaba.cobar.parser.ast.expression.primary.function.FunctionExpression;
+import org.apache.commons.lang3.StringUtils;
+import org.apache.commons.lang3.tuple.ImmutablePair;
 
 import java.io.*;
 import java.util.ArrayList;
@@ -12,7 +14,7 @@ import java.util.Map;
 
 /**
  * rule for range based on long number
- *
+ * <p/>
  * just borrow ideas from @{com.alibaba.cobar.route.function.PartitionByFileMap}
  *
  * @author yunshi@wacai.com
@@ -22,7 +24,7 @@ public class PartitionByRange extends FunctionExpression implements RuleAlgorith
 
     private String rangeDefinitionFile;
 
-    private Map<Range, Integer> mapping;
+    private Map<Integer, ImmutablePair<Long, Long>> mapping;
 
     public PartitionByRange(String functionName) {
         super(functionName, null);
@@ -61,9 +63,9 @@ public class PartitionByRange extends FunctionExpression implements RuleAlgorith
         }
 
 
-        for (Map.Entry<Range, Integer> entry : mapping.entrySet()) {
-            if (entry.getKey().in(key.longValue())) {
-                rst[0] = entry.getValue();
+        for (Map.Entry<Integer, ImmutablePair<Long, Long>> entry : mapping.entrySet()) {
+            if (key.longValue() >= entry.getValue().getLeft() && key.longValue() < entry.getValue().getRight()) {
+                rst[0] = entry.getKey();
                 break;
             }
         }
@@ -101,25 +103,26 @@ public class PartitionByRange extends FunctionExpression implements RuleAlgorith
         try {
             fin = new FileInputStream(new File(getRangeDefinitionFile()));
             BufferedReader in = new BufferedReader(new InputStreamReader(fin));
-            mapping = new HashMap<Range, Integer>();
+            mapping = new HashMap<Integer, ImmutablePair<Long, Long>>();
             for (String line; (line = in.readLine()) != null; ) {
                 line = line.trim();
-                if (line.startsWith("#") || line.startsWith("//"))
-                    continue;
-                int ind = line.indexOf('=');
-                if (ind < 0)
+                if (line.startsWith("#") || line.startsWith("//") || !StringUtils.trimToEmpty(line).contains("="))
                     continue;
                 try {
-                    String range = line.substring(0, ind).trim();
-                    int shardIndex = Integer.parseInt(line.substring(ind + 1).trim());
-                    int rangeSep = range.indexOf(",");
-                    if (rangeSep > 0) {
-                        long low = Long.parseLong(range.substring(0, rangeSep));
-                        long high = Long.MAX_VALUE;
-                        if (rangeSep + 1 < range.length()) {
-                            high = Long.parseLong(range.substring(rangeSep + 1).trim());
+                    String key = StringUtils.trimToEmpty(StringUtils.substringBefore(line, "="));
+                    int shardIndex = Integer.parseInt(StringUtils.trimToEmpty(StringUtils.substringAfter(line, "=")));
+
+                    if (StringUtils.contains(key, ",")) {
+                        String open = StringUtils.trimToEmpty(StringUtils.substringBefore(key, ","));
+                        String end = StringUtils.trimToEmpty(StringUtils.substringAfter(key, ","));
+                        if (StringUtils.isEmpty(end)) {
+                            mapping.put(shardIndex, ImmutablePair.of(Long.parseLong(open), Long.MAX_VALUE));
+                        } else {
+                            mapping.put(shardIndex, ImmutablePair.of(Long.parseLong(open), Long.parseLong(end)));
                         }
-                        mapping.put(new Range(low, high), shardIndex);
+                    } else {
+                        if (StringUtils.isEmpty(key)) continue;
+                        mapping.put(shardIndex, ImmutablePair.of(Long.parseLong(key), Long.MAX_VALUE));
                     }
                 } catch (Exception e) {
                     throw e;
@@ -143,75 +146,15 @@ public class PartitionByRange extends FunctionExpression implements RuleAlgorith
         this.rangeDefinitionFile = rangeDefinitionFile;
     }
 
-    public Map<Range, Integer> getMapping() {
+    public Map<Integer, ImmutablePair<Long, Long>> getMapping() {
         return this.mapping;
-    }
-
-    public static class Range {
-        private Long low;
-        private Long high;
-
-        public Range(Long lowMark, Long highMark) {
-            low = lowMark;
-            high = highMark;
-        }
-
-
-        public Long getLow() {
-            return low;
-        }
-
-        public void setLow(Long low) {
-            this.low = low;
-        }
-
-        public Long getHigh() {
-            return high;
-        }
-
-        public void setHigh(Long high) {
-            this.high = high;
-        }
-
-        public boolean in(Long key) {
-            if (key >= low && key < high) return true;
-            return false;
-        }
-
-        @Override
-        public boolean equals(Object o) {
-            if (this == o) return true;
-            if (o == null || getClass() != o.getClass()) return false;
-
-            Range range = (Range) o;
-
-            if (!high.equals(range.high)) return false;
-            if (!low.equals(range.low)) return false;
-
-            return true;
-        }
-
-        @Override
-        public int hashCode() {
-            int result = low.hashCode();
-            result = 31 * result + high.hashCode();
-            return result;
-        }
-
-        @Override
-        public String toString() {
-            return "Range{" +
-                    "low=" + low +
-                    ", high=" + high +
-                    '}';
-        }
     }
 
     public static void main(String[] args) {
         PartitionByRange f = new PartitionByRange("");
-        f.setRangeDefinitionFile("/Users/fuqiangwang/Downloads/aa.txt");
+        f.setRangeDefinitionFile("conf/PartitionByRange.conf");
         f.init();
-        for (Map.Entry<Range, Integer> entry : f.getMapping().entrySet()) {
+        for (Map.Entry<Integer, ImmutablePair<Long, Long>> entry : f.getMapping().entrySet()) {
             System.out.println(entry.getKey() + "/" + entry.getValue());
         }
     }
